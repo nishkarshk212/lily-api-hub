@@ -47,9 +47,10 @@ class YouTube:
 
     def get_cookies(self):
         if not self.checked:
-            for file in os.listdir(self.cookie_dir):
-                if file.endswith(".txt"):
-                    self.cookies.append(f"{self.cookie_dir}/{file}")
+            if os.path.exists(self.cookie_dir):
+                for file in os.listdir(self.cookie_dir):
+                    if file.endswith(".txt"):
+                        self.cookies.append(f"{self.cookie_dir}/{file}")
             self.checked = True
         if not self.cookies:
             if not self.warned:
@@ -60,6 +61,7 @@ class YouTube:
 
     async def save_cookies(self, urls: list[str]) -> None:
         logger.info("Saving cookies from urls...")
+        os.makedirs(self.cookie_dir, exist_ok=True)
         async with aiohttp.ClientSession() as session:
             for url in urls:
                 name = url.split("/")[-1]
@@ -418,10 +420,117 @@ class YouTube:
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
+    async def _fetch_to_local(self, url: str, video_id: str, video: bool) -> str | None:
+        """Download a known direct stream URL to a local, IP-correct file."""
+        ext = "mkv" if video else "webm"
+        path = Path(f"downloads/{video_id}.{ext}")
+        if path.exists() and path.stat().st_size > 0:
+            return str(path)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=600),
+                    allow_redirects=True,
+                ) as fr:
+                    if fr.status != 200:
+                        logger.warning(
+                            f"🌐 direct fetch failed: HTTP {fr.status} for {video_id}"
+                        )
+                        return None
+                    os.makedirs("downloads", exist_ok=True)
+                    with open(path, "wb") as f:
+                        async for chunk in fr.content.iter_chunked(1024 * 1024):
+                            f.write(chunk)
+            if path.exists() and path.stat().st_size > 0:
+                logger.info(f"🌐 direct fetch completed for {video_id}")
+                return str(path)
+        except Exception as e:
+            logger.warning(f"🌐 direct fetch error for {video_id}: {e}")
+        return None
+
+    async def _lily_download(self, video_id: str, video: bool) -> str | None:
+        """Fetch a streamable URL from a lily backend and download it locally.
+
+        The lily /play endpoint returns a direct CDN URL. We pull the bytes to
+        this server so the resulting local file is IP-correct and playable by
+        PyTgCalls (unlike streaming the remote URL, which may be IP-sensitive).
+        Tries every configured lily backend in order; returns the local path or
+        None if all fail.
+        """
+        if not config.LILY_API_KEY:
+            return None
+        kind = "video" if video else "audio"
+        ext = "mkv" if video else "webm"
+        path = Path(f"downloads/{video_id}.{ext}")
+        if path.exists() and path.stat().st_size > 0:
+            logger.info(f"💾 [LOCAL] Found existing {kind} for ID {video_id}")
+            return str(path)
+        backends = [
+            (config.LILY_API_URL, config.LILY_API_KEY, "lily"),
+            (config.LILY_FALLBACK_URL, config.LILY_FALLBACK_KEY, "nexgen"),
+        ]
+        for base, key, name in backends:
+            if not base or not key:
+                continue
+            params = {
+                "type": kind,
+                "platform": "youtube",
+                "id": video_id,
+                "api_key": key,
+            }
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{base.rstrip('/')}/play",
+                        params=params,
+                        timeout=aiohttp.ClientTimeout(total=25),
+                    ) as resp:
+                        data = await resp.json(content_type=None)
+                if not (data.get("success") and data.get("direct_url")):
+                    logger.warning(
+                        f"[{name}] /play {kind} returned no direct_url for {video_id}"
+                    )
+                    continue
+                du = data["direct_url"]
+                logger.info(
+                    f"💾 [{name}] Downloading {kind} for {video_id} via direct_url"
+                )
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        du,
+                        timeout=aiohttp.ClientTimeout(total=600),
+                        allow_redirects=True,
+                    ) as fr:
+                        if fr.status != 200:
+                            logger.warning(
+                                f"[{name}] {kind} stream failed: HTTP {fr.status}"
+                            )
+                            continue
+                        os.makedirs("downloads", exist_ok=True)
+                        with open(path, "wb") as f:
+                            async for chunk in fr.content.iter_chunked(1024 * 1024):
+                                f.write(chunk)
+                if path.exists() and path.stat().st_size > 0:
+                    logger.info(
+                        f"💾 [{name.upper()}] {kind} download completed for {video_id}"
+                    )
+                    return str(path)
+            except Exception as e:
+                logger.warning(
+                    f"[{name}] {kind} download failed for {video_id}: {e}"
+                )
+                continue
+        return None
+
     async def _download_audio(self, video_id: str):
-        # Primary path: download locally via yt-dlp (IP-correct URL from this
-        # server, so it plays). teaminflex is only a fallback when API_KEY is
-        # configured, since its direct_url is also IP-sensitive.
+        # Resilient chain: lily backend (downloads a local, IP-correct file)
+        # -> yt-dlp (local, needs cookies on bot-flagged IPs) -> teaminflex.
+        # lily is first because it does not depend on this server's IP.
+        local = await self._lily_download(video_id, video=False)
+        if local:
+            return local
+
         path = Path(f"downloads/{video_id}.webm")
         if path.exists():
             logger.info(f"🎵 [LOCAL] Found existing audio for ID {video_id}")
@@ -498,9 +607,13 @@ class YouTube:
                 return None
 
     async def _download_video(self, video_id: str):
-        # Primary path: download locally via yt-dlp (IP-correct URL from
-        # this server, so it plays). teaminflex is only a fallback when
-        # API_KEY is configured.
+        # Resilient chain: lily backend (downloads a local, IP-correct file)
+        # -> yt-dlp (local, needs cookies on bot-flagged IPs) -> teaminflex.
+        # lily is first because it does not depend on this server's IP.
+        local = await self._lily_download(video_id, video=True)
+        if local:
+            return local
+
         path = Path(f"downloads/{video_id}.mkv")
         if path.exists():
             logger.info(f"🎥 [LOCAL] Found existing video for ID {video_id}")

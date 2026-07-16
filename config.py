@@ -85,7 +85,6 @@ class Config:
                 "MONGO_URL",
                 "LOGGER_ID",
                 "OWNER_ID",
-                "SESSION1",
             ]
             if not getattr(self, var)
         ]
