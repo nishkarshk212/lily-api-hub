@@ -45,6 +45,10 @@ class LilyApi:
         self.retries = max(1, retries)
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self._session: Optional[aiohttp.ClientSession] = None
+        # Once an auth error (401/403) is seen we stop querying this provider
+        # until a later successful call resets it — avoids hammering a dead
+        # key and spamming the log on every search.
+        self.auth_ok: bool = True
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -75,6 +79,11 @@ class LilyApi:
         if not self.api_key or not self.base or not self.platforms:
             return None
 
+        # Fast-fail if we already know this provider's key is rejected, so we
+        # don't hammer it or spam warnings on every search.
+        if not self.auth_ok:
+            return None
+
         params = {
             "api_key": self.api_key,
             "platforms": ",".join(self.platforms),
@@ -87,26 +96,6 @@ class LilyApi:
                 session = await self._get_session()
                 async with session.get(endpoint, params=params) as resp:
                     data = await resp.json(content_type=None)
-                if (
-                    resp.status == 200
-                    and isinstance(data, dict)
-                    and data.get("success")
-                ):
-                    item = self._first_playable(data)
-                    if item is not None:
-                        logger.info(
-                            f"[{self.name}] PLAY resolved via provider="
-                            f"{self.name} url={self.base} "
-                            f"platform={','.join(self.platforms)} "
-                            f"key={mask_key(self.api_key)} query={query!r} "
-                            f"-> title={item.get('title')!r}"
-                        )
-                    return item
-                logger.warning(
-                    f"[{self.name}] search({query!r}) HTTP {resp.status} -> "
-                    f"{data if isinstance(data, dict) else 'invalid response'}"
-                )
-                return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 logger.warning(
                     f"[{self.name}] search({query!r}) attempt "
@@ -114,7 +103,45 @@ class LilyApi:
                 )
                 if attempt < self.retries:
                     await asyncio.sleep(1)
+                continue
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"[{self.name}] search({query!r}) error: {exc}")
                 return None
+
+            if resp.status in (401, 403):
+                self.auth_ok = False
+                logger.error(
+                    f"[{self.name}] API key REJECTED (HTTP {resp.status}) for "
+                    f"{self.base} — set a valid {self.name.upper()}_API_KEY or "
+                    f"this source will be skipped. query={query!r}"
+                )
+                return None
+
+            if (
+                resp.status != 200
+                or not isinstance(data, dict)
+                or not data.get("success")
+            ):
+                logger.warning(
+                    f"[{self.name}] search({query!r}) HTTP {resp.status} -> "
+                    f"{data if isinstance(data, dict) else 'invalid response'}"
+                )
+                return None
+
+            item = self._first_playable(data)
+            if item is not None:
+                self.auth_ok = True
+                logger.info(
+                    f"[{self.name}] PLAY resolved via provider="
+                    f"{self.name} url={self.base} "
+                    f"platform={','.join(self.platforms)} "
+                    f"key={mask_key(self.api_key)} query={query!r} "
+                    f"-> title={item.get('title')!r}"
+                )
+            else:
+                logger.info(
+                    f"[{self.name}] search({query!r}) returned no playable "
+                    f"results (success but empty)."
+                )
+            return item
         return None

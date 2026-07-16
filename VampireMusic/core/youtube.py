@@ -122,6 +122,13 @@ class YouTube:
                 track = self._track_from_lily(item, m_id)
                 track.source = source
                 return track
+            # Both music sources returned nothing (dead key / empty / error).
+            # Fall through to the YouTube search below so a song-name query
+            # still resolves to a YouTube video instead of failing outright.
+            logger.info(
+                f"[SEARCH] music sources (lily/nexgen) returned no result "
+                f"for {query!r}; falling back to YouTube search."
+            )
 
         try:
             _search = VideosSearch(query, limit=1, with_live=False)
