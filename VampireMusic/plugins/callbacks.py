@@ -286,13 +286,31 @@ async def song_download_cb(_, query: types.CallbackQuery):
             os.remove(file_path)
 
 
+@app.on_callback_query(filters.regex("owner") & ~app.bl_users)
+@lang.language()
+async def _owner(_, query: types.CallbackQuery):
+    await query.answer()
+    owner_id = config.OWNER_ID
+    if not owner_id:
+        return await query.answer(query.lang["owner_missing"], show_alert=True)
+    try:
+        user = await app.get_users(owner_id)
+    except Exception:
+        return await query.answer(query.lang["owner_missing"], show_alert=True)
+    text = query.lang["owner_info"].format(
+        user.mention or f"<a href='tg://user?id={owner_id}'>Owner</a>",
+        owner_id,
+    )
+    try:
+        await query.edit_message_text(text, reply_markup=buttons.start_key(query.lang))
+    except Exception:
+        await query.message.reply_text(text)
+
+
 @app.on_callback_query(filters.regex("settings") & ~app.bl_users)
 @lang.language()
 @admin_check
 async def _settings_cb(_, query: types.CallbackQuery):
-    cmd = query.data.split()
-    if len(cmd) == 1:
-        return await query.answer()
     await query.answer(query.lang["processing"], show_alert=True)
 
     chat_id = query.message.chat.id
