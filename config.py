@@ -47,7 +47,7 @@ class Config:
         self.LILY_FALLBACK_KEY = getenv("LILY_FALLBACK_KEY", "")
 
         # Comma-separated platforms to search, in order of preference.
-        self.LILY_PLATFORM = getenv("LILY_PLATFORM", "jiosaavn")
+        self.LILY_PLATFORM = getenv("LILY_PLATFORM", "youtube")
 
         self.AUTO_LEAVE: bool = getenv("AUTO_LEAVE", "False").lower() == "true"
         self.AUTO_END: bool = getenv("AUTO_END", "False").lower() == "true"

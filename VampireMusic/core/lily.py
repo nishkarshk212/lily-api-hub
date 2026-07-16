@@ -61,12 +61,23 @@ class LilyApi:
             self._session = None
 
     def _first_playable(self, data: dict) -> Optional[dict]:
-        """Return the first result (across platforms) that has a stream URL."""
+        """Return the first result (across platforms) safe to play.
+
+        JioSaavn-style platforms need a direct ``stream_url``. The
+        ``youtube`` platform returns a watch ``url`` instead (no
+        stream_url); the bot's existing YouTube playback path resolves that
+        to a direct stream, so a youtube result with a ``url`` is accepted.
+        """
         results = data.get("results") or {}
         for platform in self.platforms:
             block = results.get(platform) or {}
             for item in block.get("results") or []:
-                if item.get("stream_url") and not item.get("preview_only"):
+                if item.get("preview_only"):
+                    continue
+                if item.get("stream_url"):
+                    return item
+                # youtube platform: accept the watch url; playback resolves it
+                if platform == "youtube" and item.get("url"):
                     return item
         return None
 
