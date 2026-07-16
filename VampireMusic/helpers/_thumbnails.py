@@ -3,43 +3,30 @@ import os
 from pathlib import Path
 
 import aiohttp
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 from VampireMusic import config
 from VampireMusic.helpers import Track
 
+try:
+    from unidecode import unidecode
+except ImportError:
+    def unidecode(text):
+        return text
+
 _HELP_DIR = Path(__file__).parent
+FONT_TITLE_PATH = str(_HELP_DIR / "Raleway-Bold.ttf")
+FONT_INFO_PATH = str(_HELP_DIR / "Inter-Light.ttf")
 
 
-def _font(name: str, size: int) -> ImageFont.ImageFont:
+def safe_font(path, size):
     try:
-        return ImageFont.truetype(str(_HELP_DIR / name), size)
+        return ImageFont.truetype(path, size)
     except Exception:
         return ImageFont.load_default()
 
 
-def draw_text_bbox(font, text: str):
-    return ImageDraw.Draw(Image.new("RGB", (1, 1))).textbbox((0, 0), text, font=font)
-
-
-def wrap_text(text: str, font, max_w: int, max_lines: int = 2) -> str:
-    words = text.split()
-    lines, cur = [], ""
-    for w in words:
-        trial = f"{cur} {w}".strip()
-        if ImageDraw.Draw(Image.new("RGB", (1, 1))).textlength(trial, font=font) <= max_w:
-            cur = trial
-        else:
-            lines.append(cur)
-            cur = w
-            if len(lines) == max_lines:
-                break
-    if cur:
-        lines.append(cur)
-    return "\n".join(lines[:max_lines])
-
-
-def _fmt(sec: int) -> str:
+def _fmt(sec):
     try:
         sec = int(sec)
     except (TypeError, ValueError):
@@ -49,170 +36,242 @@ def _fmt(sec: int) -> str:
         h, m = divmod(m, 60)
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
+
+
 class Thumbnail:
     WIDTH = 1280
     HEIGHT = 720
 
     def __init__(self):
-        from pathlib import Path
-        try:
-            help_dir = Path(__file__).parent
-            self.title_font = ImageFont.truetype(str(help_dir / "Raleway-Bold.ttf"), 48)
-            self.small_font = ImageFont.truetype(str(help_dir / "Inter-Light.ttf"), 28)
-            self.time_font = ImageFont.truetype(str(help_dir / "Raleway-Bold.ttf"), 24)
-        except Exception as e:
-            print(f"Error loading fonts: {e}")
-            self.title_font = ImageFont.load_default()
-            self.small_font = ImageFont.load_default()
-            self.time_font = ImageFont.load_default()
-
+        self.size = (self.WIDTH, self.HEIGHT)
         self.session = None
 
     async def start(self):
         self.session = aiohttp.ClientSession()
+        return True
 
     async def close(self):
         if self.session:
             await self.session.close()
 
+    async def save_thumb(self, output_path: str, url: str) -> str:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        for attempt in range(3):
+            try:
+                if url.startswith("http"):
+                    async with aiohttp.ClientSession(headers=headers) as session:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            if resp.status == 200:
+                                content = await resp.read()
+                                with open(output_path, "wb") as f:
+                                    f.write(content)
+                                return output_path
+            except Exception as e:
+                if attempt == 2:
+                    print(f"Error saving thumb: {e}")
+                await asyncio.sleep(1)
+        return output_path
+
     async def download_thumb(self, url: str, path: str):
-        async with self.session.get(url) as resp:
-            resp.raise_for_status()
-            with open(path, "wb") as f:
-                f.write(await resp.read())
+        await self.save_thumb(path, url)
 
     def create_image(self, thumb_path, output, song):
-        # Full-bleed blurred warm background
-        bg = Image.open(thumb_path).convert("RGB").resize((self.WIDTH, self.HEIGHT))
-        bg = bg.filter(ImageFilter.GaussianBlur(45))
-        bg = ImageEnhance.Brightness(bg).enhance(0.92)
-        bg = ImageEnhance.Contrast(bg).enhance(1.05)
-        bg = ImageEnhance.Color(bg).enhance(1.10)
+        # Dynamic font loading for proper sizes
+        font_title = safe_font(FONT_TITLE_PATH, 34)
+        font_info = safe_font(FONT_INFO_PATH, 24)
+        font_time = safe_font(FONT_INFO_PATH, 20)
+        font_brand = safe_font(FONT_TITLE_PATH, 26)
 
-        # Right-side dark panel: gradient from left (transparent) to right (opaque)
-        panel = Image.new("L", (self.WIDTH, self.HEIGHT), 0)
-        pdraw = ImageDraw.Draw(panel)
-        pw0, pw1 = int(self.WIDTH * 0.42), self.WIDTH
-        for x in range(pw0, pw1):
-            a = int(235 * (x - pw0) / (pw1 - pw0))
-            pdraw.line([(x, 0), (x, self.HEIGHT)], fill=a)
-        dark = Image.new("RGB", (self.WIDTH, self.HEIGHT), (8, 6, 8))
-        bg = Image.composite(dark, bg, panel)
-        # Subtle overall vignette
-        vig = Image.new("L", (self.WIDTH, self.HEIGHT), 0)
-        vdraw = ImageDraw.Draw(vig)
-        vdraw.rectangle([0, 0, self.WIDTH, self.HEIGHT], fill=60)
-        vdraw.ellipse([-200, -200, self.WIDTH + 200, self.HEIGHT + 200], fill=0)
-        bg = Image.composite(bg, Image.new("RGB", (self.WIDTH, self.HEIGHT), (0, 0, 0)), vig)
+        W, H = self.size
 
-        ACCENT = (197, 48, 48)  # reference red ~ rgb(163,52,49)
+        # --- 1. DARK BLURRED BACKGROUND ---
+        try:
+            src = Image.open(thumb_path).convert("RGBA")
+        except Exception:
+            try:
+                src = Image.new("RGBA", (W, H), (30, 30, 30, 255))
+            except Exception:
+                return config.DEFAULT_THUMB
 
-        # Big rounded album cover on the left
-        cover = 440
-        ax, ay = 90, (self.HEIGHT - cover) // 2 - 10
-        art = Image.open(thumb_path).convert("RGB").resize((cover, cover))
-        # soft shadow under the cover
-        sh = Image.new("RGBA", (cover + 40, cover + 40), (0, 0, 0, 0))
-        sdraw = ImageDraw.Draw(sh)
-        sdraw.rounded_rectangle((20, 24, cover + 20, cover + 24), radius=40, fill=(0, 0, 0, 120))
-        bg.paste(sh, (ax - 20, ay - 20), sh)
-        mask = Image.new("L", (cover, cover), 0)
-        ImageDraw.Draw(mask).rounded_rectangle((0, 0, cover, cover), radius=40, fill=255)
-        art.putalpha(mask)
-        bg.paste(art, (ax, ay), art)
+        bg_ratio = W / H
+        src_ratio = src.width / src.height
+        if src_ratio > bg_ratio:
+            new_w = int(src.height * bg_ratio)
+            offset = (src.width - new_w) // 2
+            bg = src.crop((offset, 0, offset + new_w, src.height))
+        else:
+            new_h = int(src.width / bg_ratio)
+            offset = (src.height - new_h) // 2
+            bg = src.crop((0, offset, src.width, offset + new_h))
 
-        # "NOW PLAYING" pill above the cover
-        pill_font = _font("Raleway-Bold.ttf", 24)
-        pill = "▶ NOW PLAYING"
-        pb = draw_text_bbox(pill_font, pill)
-        pw, ph = pb[2] - pb[0] + 44, pb[3] - pb[1] + 24
-        px, py = ax, ay - 56
-        pimg = Image.new("RGBA", (pw, ph), ACCENT + (235,))
-        pdraw2 = ImageDraw.Draw(pimg)
-        pdraw2.rounded_rectangle((0, 0, pw, ph), radius=ph // 2, outline=(255, 255, 255, 90), width=2)
-        bg.paste(pimg, (px, py), pimg)
-        ImageDraw.Draw(bg).text(
-            (px + 22, py + (ph - (pb[3] - pb[1])) // 2 - 2), pill, fill="white", font=pill_font,
+        bg = bg.resize((W, H), Image.Resampling.LANCZOS)
+        bg = bg.filter(ImageFilter.GaussianBlur(40))
+        bg = bg.convert("RGBA")
+
+        # Dark overlay
+        bg_overlay = Image.new("RGBA", (W, H), (0, 0, 0, 140))
+        bg = Image.alpha_composite(bg, bg_overlay)
+
+        # Draw Brand Header on Background
+        draw_bg = ImageDraw.Draw(bg)
+        brand_text = "Vampire Music"
+
+        brand_bbox = draw_bg.textbbox((0, 0), brand_text, font=font_brand)
+        brand_w = brand_bbox[2] - brand_bbox[0]
+        draw_bg.text((W - brand_w - 60, 40), brand_text, fill=(255, 255, 255, 220), font=font_brand)
+
+        # --- 2. CARD COMPONENT ---
+        card_w, card_h = 900, 560
+        card_x = (W - card_w) // 2
+        card_y = (H - card_h) // 2 + 20  # Shift down slightly to balance brand header
+
+        # Draw soft drop shadow behind the card
+        shadow_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        shadow_draw = ImageDraw.Draw(shadow_layer)
+        shadow_draw.rounded_rectangle(
+            (card_x - 4, card_y + 8, card_x + card_w + 4, card_y + card_h + 12),
+            radius=40,
+            fill=(0, 0, 0, 110),
+        )
+        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(25))
+        bg = Image.alpha_composite(bg, shadow_layer)
+
+        # Create Card Layer
+        card_img = Image.new("RGBA", (card_w, card_h), (245, 245, 245, 255))
+        card_draw = ImageDraw.Draw(card_img)
+
+        # --- 3. INNER COVER IMAGE ---
+        cover_w, cover_h = 820, 320
+        cover_x, cover_y = 40, 40
+        cover_radius = 20
+
+        cover_resized = ImageOps.fit(src, (cover_w, cover_h), Image.Resampling.LANCZOS)
+
+        # Create cover mask for rounded corners
+        cover_mask = Image.new("L", (cover_w, cover_h), 0)
+        ImageDraw.Draw(cover_mask).rounded_rectangle(
+            (0, 0, cover_w, cover_h), radius=cover_radius, fill=255
+        )
+        card_img.paste(cover_resized, (cover_x, cover_y), cover_mask)
+
+        # --- 4. DETAILS SECTION ---
+        # Title
+        title_text = unidecode(str(song.title or "Unknown"))
+
+        def ellipsize(s, font, max_w):
+            bbox = card_draw.textbbox((0, 0), s, font=font)
+            if (bbox[2] - bbox[0]) <= max_w:
+                return s
+            lo, hi = 1, len(s)
+            best = "…"
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                cand = s[:mid].rstrip() + "…"
+                bbox = card_draw.textbbox((0, 0), cand, font=font)
+                if (bbox[2] - bbox[0]) <= max_w:
+                    best = cand
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            return best
+
+        title_str = ellipsize(title_text, font_title, 820)
+        title_y = 385
+        card_draw.text((40, title_y), title_str, fill=(20, 20, 20, 255), font=font_title)
+
+        # Subtitle (Channel name & views)
+        sub_text = song.channel_name or "YouTube"
+        if getattr(song, "view_count", None):
+            sub_text += f"   ·   {song.view_count}"
+        subtitle_str = ellipsize(sub_text, font_info, 820)
+        subtitle_y = 435
+        card_draw.text((40, subtitle_y), subtitle_str, fill=(100, 100, 100, 255), font=font_info)
+
+        # --- 5. PROGRESS BAR ---
+        bar_x = 40
+        bar_y = 485
+        bar_w = 820
+        bar_h = 6
+        # Track
+        card_draw.rounded_rectangle(
+            (bar_x, bar_y, bar_x + bar_w, bar_y + bar_h),
+            radius=3,
+            fill=(220, 220, 220, 255),
         )
 
-        draw = ImageDraw.Draw(bg)
-        # Text column on the right of the cover, over the dark panel
-        tx = ax + cover + 70
-        max_w = self.WIDTH - tx - 80
-        ty = ay + 40
+        # Filled — driven by playback position when available
+        total = getattr(song, "duration_sec", None) or 0
+        cur = getattr(song, "time", None) or 0
+        if total and cur:
+            progress_pct = min(max(cur / total, 0), 1)
+        else:
+            progress_pct = 0.35  # static default for visual playback representation
+        fill_w = int(bar_w * progress_pct)
+        card_draw.rounded_rectangle(
+            (bar_x, bar_y, bar_x + fill_w, bar_y + bar_h),
+            radius=3,
+            fill=(229, 57, 53, 255),
+        )
+        # Slider thumb (red dot)
+        thumb_radius = 6
+        thumb_cx = bar_x + fill_w
+        thumb_cy = bar_y + (bar_h // 2)
+        card_draw.ellipse(
+            (thumb_cx - thumb_radius, thumb_cy - thumb_radius, thumb_cx + thumb_radius, thumb_cy + thumb_radius),
+            fill=(229, 57, 53, 255),
+        )
 
-        title = wrap_text((song.title or "Unknown"), self.title_font, max_w, 3)
-        draw.multiline_text((tx, ty), title, fill=(252, 248, 244), font=self.title_font, spacing=10)
+        # Timestamps
+        time_y = 505
+        card_draw.text((40, time_y), _fmt(cur) if cur else "0:00", fill=(100, 100, 100, 255), font=font_time)
 
-        ay1 = ty + 3 * 58
-        channel = (song.channel_name or "Unknown")
-        if len(channel) > 38:
-            channel = channel[:37] + "…"
-        draw.text((tx, ay1), channel, fill=(222, 120, 124), font=self.small_font)
+        duration_str = song.duration or _fmt(total) or "00:00"
+        dur_bbox = card_draw.textbbox((0, 0), duration_str, font=font_time)
+        dur_w = dur_bbox[2] - dur_bbox[0]
+        card_draw.text((40 + 820 - dur_w, time_y), duration_str, fill=(100, 100, 100, 255), font=font_time)
 
-        meta = []
-        if getattr(song, "view_count", None):
-            meta.append(f"▶ {song.view_count}")
-        if getattr(song, "duration", None):
-            meta.append(f"⏱ {song.duration}")
-        if meta:
-            draw.text((tx, ay1 + 42), "   •   ".join(meta), fill=(205, 195, 195), font=self.small_font)
+        # --- 6. RED BOTTOM STRIP ---
+        card_draw.rectangle(
+            (0, card_h - 8, card_w, card_h),
+            fill=(229, 57, 53, 255),
+        )
 
-        # Brand badge (bottom-right)
-        brand_font = _font("Raleway-Bold.ttf", 26)
-        brand = "Vampire Music"
-        bb = draw_text_bbox(brand_font, brand)
-        bw, bh = (bb[2] - bb[0]) + 40, (bb[3] - bb[1]) + 30
-        bx, by = self.WIDTH - bw - 70, self.HEIGHT - bh - 60
-        badge = Image.new("RGBA", (bw, bh), (0, 0, 0, 170))
-        bdraw = ImageDraw.Draw(badge)
-        bdraw.rounded_rectangle((0, 0, bw, bh), radius=15, outline=(255, 255, 255, 50), width=2)
-        bg.paste(badge, (bx, by), badge)
-        draw.text((bx + 20, by + (bh - (bb[3] - bb[1])) // 2 - 5), brand, fill="white", font=brand_font)
+        # Paste Card onto Background with Rounded Corners Mask
+        card_mask = Image.new("L", (card_w, card_h), 0)
+        ImageDraw.Draw(card_mask).rounded_rectangle(
+            (0, 0, card_w, card_h), radius=35, fill=255
+        )
 
-        # Labeled progress bar (bottom, spans the dark panel)
-        py2 = self.HEIGHT - 70
-        sx, ex = tx - 30, self.WIDTH - 70
-        draw.line([(sx, py2), (ex, py2)], fill=(120, 120, 120, 160), width=8)
-        frac = min(max(getattr(song, "time", 0) / max(getattr(song, "duration_sec", 1) or 1, 1), 0), 1)
-        knx = sx + int((ex - sx) * frac)
-        draw.line([(sx, py2), (knx, py2)], fill=ACCENT, width=8)
-        draw.ellipse((knx - 13, py2 - 13, knx + 13, py2 + 13), fill="white")
-        draw.ellipse((knx - 7, py2 - 7, knx + 7, py2 + 7), fill=ACCENT)
-        tfont = _font("Raleway-Bold.ttf", 22)
-        cur = _fmt(getattr(song, "time", 0))
-        tot = _fmt(getattr(song, "duration_sec", 0))
-        draw.text((sx, py2 + 20), cur, fill=(225, 220, 220), font=tfont)
-        tb = draw_text_bbox(tfont, tot)
-        draw.text((ex - (tb[2] - tb[0]), py2 + 20), tot, fill=(225, 220, 220), font=tfont)
+        bg.paste(card_img, (card_x, card_y), card_mask)
 
-        bg.save(output, quality=95)
+        # Save final image
+        out = bg.convert("RGB")
+        out.save(output, "JPEG", quality=92, optimize=True)
         return output
 
-    async def generate(self, song: Track):
+    async def generate(self, song: Track) -> str:
         try:
             if not self.session:
                 await self.start()
 
             temp = f"cache/temp_{song.id}.jpg"
-            output = f"cache/{song.id}.png"
+            output = f"cache/{song.id}.jpg"
 
             if os.path.exists(output):
                 return output
 
             await self.download_thumb(song.thumbnail, temp)
-
-            await asyncio.to_thread(
-                self.create_image,
-                temp,
-                output,
-                song,
-            )
+            await asyncio.to_thread(self.create_image, temp, output, song)
 
             if os.path.exists(temp):
                 os.remove(temp)
 
             return output
 
-        except Exception:
+        except Exception as e:
+            print(f"Error generating thumbnail: {e}")
+            import traceback
+            traceback.print_exc()
             return config.DEFAULT_THUMB
