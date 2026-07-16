@@ -73,6 +73,17 @@ class YouTube:
     def valid(self, url: str) -> bool:
         return bool(re.match(self.regex, url))
 
+    def invalid(self, url: str) -> bool:
+        """True only for a YouTube link that is malformed.
+
+        Non-YouTube URLs (alt platforms, m3u8, direct media) are allowed
+        through so they can be routed by the caller.
+        """
+        low = (url or "").lower()
+        if "youtube.com" in low or "youtu.be" in low:
+            return not self.valid(url)
+        return False
+
     def _track_from_lily(self, item: dict, m_id: int) -> Track:
         """Build a Track from a lily/JioSaavn result (stream URL preset)."""
         dur = int(float(item.get("duration") or 0))
@@ -158,19 +169,33 @@ class YouTube:
                 )
         return tracks
 
-    async def resolve_video(self, video_id: str, m_id: int = 0) -> Track | None:
-        """Resolve a YouTube video id to a direct, streamable mp4 URL via lily.
+    # Canonical watch-page URL templates for the platforms /play accepts.
+    _PLATFORM_URL = {
+        "youtube": "https://youtu.be/{id}",
+        "soundcloud": "https://soundcloud.com/{id}",
+        "dailymotion": "https://www.dailymotion.com/video/{id}",
+        "vimeo": "https://vimeo.com/{id}",
+        "facebook": "https://www.facebook.com/watch/?v={id}",
+        "bilibili": "https://www.bilibili.com/video/{id}",
+    }
 
-        Uses the new GET ``/play?type=video&id=`` route which returns a
-        ``direct_url`` (a YouTube googlevideo mp4 stream). Feeding that URL
-        straight to PyTgCalls avoids the slow local mkv download. Falls back
-        to ``None`` so the caller can keep using the download path.
+    async def resolve_video(
+        self, video_id: str, m_id: int = 0, platform: str = "youtube"
+    ) -> Track | None:
+        """Resolve a video id to a direct, streamable URL via lily ``/play``.
+
+        Uses ``GET /play?type=video&platform=&id=`` which returns a
+        ``direct_url`` (e.g. a YouTube googlevideo mp4, or a resolved
+        Dailymotion/Vimeo/Facebook/Bilibili stream). Feeding that URL
+        straight to PyTgCalls avoids the slow local download. Returns
+        ``None`` on failure so the caller can fall back to downloading.
         """
         if not config.LILY_API_KEY:
             return None
         base = config.LILY_API_URL.rstrip("/")
         params = {
             "type": "video",
+            "platform": platform,
             "id": video_id,
             "api_key": config.LILY_API_KEY,
         }
@@ -183,9 +208,12 @@ class YouTube:
                 ) as resp:
                     data = await resp.json(content_type=None)
             if not (data.get("success") and data.get("direct_url")):
-                logger.warning(f"[VIDEO] /play returned no direct_url for {video_id}")
+                logger.warning(
+                    f"[VIDEO] /play returned no direct_url for {platform}:{video_id}"
+                )
                 return None
             dur = int(float(data.get("duration") or 0))
+            url_tmpl = self._PLATFORM_URL.get(platform, "{id}")
             track = Track(
                 id=video_id,
                 channel_name=data.get("channel") or "",
@@ -194,15 +222,33 @@ class YouTube:
                 message_id=m_id,
                 title=(data.get("title") or "Unknown")[:25],
                 thumbnail=data.get("thumbnail") or config.DEFAULT_THUMB,
-                url=f"https://youtu.be/{video_id}",
+                url=url_tmpl.format(id=video_id),
                 file_path=data["direct_url"],
                 video=True,
             )
             track.source = "lily"
             return track
         except Exception as e:
-            logger.warning(f"[VIDEO] resolve_video({video_id}) failed: {e}")
+            logger.warning(
+                f"[VIDEO] resolve_video({platform}:{video_id}) failed: {e}"
+            )
             return None
+
+    # Regexes to detect an alt-platform watch URL and pull its id.
+    _ALT_PATTERNS = {
+        "dailymotion": re.compile(r"(?:dailymotion\.com/video/|dai\.ly/)([A-Za-z0-9]+)"),
+        "vimeo": re.compile(r"vimeo\.com/(?:video/)?(\d+)"),
+        "facebook": re.compile(r"facebook\.com/(?:watch/?\?v=|[^/]+/videos/)(\d+)"),
+        "bilibili": re.compile(r"bilibili\.com/video/([A-Za-z0-9]+)"),
+    }
+
+    def detect_platform(self, url: str) -> tuple[str, str] | None:
+        """Return ``(platform, id)`` for a supported alt-platform URL, else None."""
+        for platform, pat in self._ALT_PATTERNS.items():
+            match = pat.search(url or "")
+            if match:
+                return platform, match.group(1)
+        return None
 
     async def playlist(
         self, limit: int, user: str, url: str, video: bool

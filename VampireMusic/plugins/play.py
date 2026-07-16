@@ -41,6 +41,15 @@ async def play_hndlr(
         setattr(sent, "lang", m.lang)
         file = await tg.download(m.reply_to_message, sent)
 
+    elif video and url and (alt := yt.detect_platform(url)):
+        # Dailymotion/Vimeo/Facebook/Bilibili video links -> resolve a
+        # direct stream via lily /play (else they'd be mis-routed as m3u8).
+        file = await yt.resolve_video(alt[1], sent.id, platform=alt[0])
+        if not file:
+            return await sent.edit_text(
+                m.lang["play_not_found"].format(config.SUPPORT_CHAT)
+            )
+
     elif m3u8:
         file = await tg.process_m3u8(url, sent.id, video)
 
@@ -77,7 +86,8 @@ async def play_hndlr(
     # Fast path for video: resolve a direct mp4 stream URL via the lily
     # /play endpoint so we stream straight to PyTgCalls (no local mkv
     # download). Falls back to the download path below if it fails.
-    if video and file.id:
+    # Skipped when already resolved (e.g. an alt-platform link above).
+    if video and file.id and not file.file_path:
         resolved = await yt.resolve_video(file.id, file.message_id)
         if resolved:
             file = resolved
