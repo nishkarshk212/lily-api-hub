@@ -6,6 +6,7 @@ from ._inline import Inline
 from ._queue import Queue
 from ._thumbnails import Thumbnail
 from ._utilities import Utilities
+from ._welcome import parse_buttons, render_text
 
 buttons = Inline()
 utils = Utilities()

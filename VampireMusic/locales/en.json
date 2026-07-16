@@ -194,4 +194,18 @@
     "help_10": "ᴠᴄ ʟᴏɢɢᴇʀ",
     "help_11": "ᴀᴜᴛᴏᴘʟᴀʏ",
     "help_thumb": "<u><b>Thumbnail commands:</b></u>\n\n/nothumb [enable|disable]: Toggles the thumbnail off/on for the chat."
+, "welcome": "ᴡᴇʟᴄᴏᴍᴇ"
+, "welcome_instr": "<b>➻ Sᴇᴛ ᴡᴇʟᴄᴏᴍᴇ ᴍᴇssᴀɢᴇ</b>\n\nReply to a message or pass text with <code>/setwelcome</code>.\n\n<b>ʏᴏᴜ ᴄᴀɴ ᴜsᴇ ʜᴛᴍʟ ᴀɴᴅ:</b>\n• <code>{id}</code> = ᴜsᴇʀ ɪᴅ\n• <code>{name}</code> = ᴜsᴇʀ ɴᴀᴍᴇ\n• <code>{surname}</code> = ᴜsᴇʀ sᴜʀɴᴀᴍᴇ\n• <code>{namesurname}</code> = ɴᴀᴍᴇ ᴀɴᴅ sᴜʀɴᴀᴍᴇ\n• <code>{lang}</code> = ᴜsᴇʀ ʟᴀɴɢᴜᴀɢᴇ\n• <code>{date}</code> = ᴄᴜʀʀᴇɴᴛ ᴅᴀᴛᴇ\n• <code>{time}</code> = ᴄᴜʀʀᴇɴᴛ ᴛɪᴍᴇ\n• <code>{weekday}</code> = ᴡᴇᴇᴋ ᴅᴀʏ\n• <code>{mention}</code> = ʟɪɴᴋ ᴛᴏ ᴛʜᴇ ᴜsᴇʀ ᴘʀᴏꜰɪʟᴇ\n• <code>{username}</code> = ᴜsᴇʀɴᴀᴍᴇ\n• <code>{groupname}</code> = ɢʀᴏᴜᴘ ɴᴀᴍᴇ\n• <code>{rules}</code> = ɢʀᴏᴜᴘ ʀᴇɢᴜʟᴀᴛɪᴏɴ\n\n<b>Buttons</b> (via /setwelcomebutton), one row per line:\n<code>Rules - https://t.me/link | Support - https://t.me/link</code>\n\n<b>Media</b>: reply a photo/video with /setwelcomemedia.\n<b>Toggle</b>: /welcometoggle [on|off] · <b>Reset</b>: /resetwelcome"
+, "welcome_set": "✓ ᴡᴇʟᴄᴏᴍᴇ ᴍᴇssᴀɢᴇ sᴀᴠᴇᴅ ᴀɴᴅ ᴇɴᴀʙʟᴇᴅ."
+, "welcome_media_set": "✓ ᴡᴇʟᴄᴏᴍᴇ ᴍᴇᴅɪᴀ sᴀᴠᴇᴅ."
+, "welcome_media_clear": "✓ ᴡᴇʟᴄᴏᴍᴇ ᴍᴇᴅɪᴀ ʀᴇᴍᴏᴠᴇᴅ."
+, "welcome_media_usage": "Reply to a photo/video/GIF with <code>/setwelcomemedia</code>, or <code>/setwelcomemedia off</code> to clear."
+, "welcome_button_usage": "Send button spec with <code>/setwelcomebutton</code>, one row per line:\n<code>Text - https://url | Text - https://url</code>\nUse <code>/setwelcomebutton off</code> to clear."
+, "welcome_button_set": "✓ ᴡᴇʟᴄᴏᴍᴇ ʙᴜᴛᴛᴏɴs sᴀᴠᴇᴅ."
+, "welcome_button_clear": "✓ ᴡᴇʟᴄᴏᴍᴇ ʙᴜᴛᴛᴏɴs ʀᴇᴍᴏᴠᴇᴅ."
+, "welcome_button_invalid": "✗ Nᴏ ᴠᴀʟɪᴅ ʙᴜᴛᴛᴏɴs ꜰᴏᴜɴᴅ. Uꜱᴇ: <code>Text - https://url</code>"
+, "welcome_toggle_usage": "<b>Usage:</b> <code>/welcometoggle [on|off]</code>"
+, "welcome_on": "✓ ᴡᴇʟᴄᴏᴍᴇ ᴍᴇssᴀɢᴇ ᴇɴᴀʙʟᴇᴅ."
+, "welcome_off": "✓ ᴡᴇʟᴄᴏᴍᴇ ᴍᴇssᴀɢᴇ ᴅɪsᴀʙʟᴇᴅ."
+, "welcome_reset": "✓ ᴡᴇʟᴄᴏᴍᴇ ᴄᴏɴꜰɪɢ ʀᴇsᴇᴛ."
 , "queue_finished": "➲ ᴛʜᴇ ϙᴜᴇᴜᴇ ʜᴀs ғɪɴɪsʜᴇᴅ. ᴜsᴇ /play ᴛᴏ ᴀᴅᴅ ᴍᴏʀᴇ.⚡️"}

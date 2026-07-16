@@ -201,6 +201,7 @@ class Inline:
         thumbnail: bool,
         language: str,
         chat_id: int,
+        welcome: bool = False,
     ) -> types.InlineKeyboardMarkup:
         _on = "ᴏɴ ☜"
         _off = "ᴏғғ ☜"
@@ -241,6 +242,16 @@ class Inline:
                     ),
                     self.ikb(
                         text=_on if thumbnail else _off, callback_data="settings thumb"
+                    ),
+                ],
+                [
+                    self.ikb(
+                        text=lang["welcome"] + " ➜",
+                        callback_data="settings welcome_info",
+                    ),
+                    self.ikb(
+                        text=_on if welcome else _off,
+                        callback_data="settings welcome",
                     ),
                 ],
                 [

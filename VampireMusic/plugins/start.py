@@ -62,6 +62,7 @@ async def settings(_, message: types.Message):
     vclogger = await db.get_vclogger(message.chat.id)
     thumbnail = await db.get_thumb_mode(message.chat.id)
     _language = await db.get_lang(message.chat.id)
+    welcome = (await db.get_welcome(message.chat.id))["enabled"]
     await message.reply_text(
         text=message.lang["start_settings"].format(message.chat.title),
         reply_markup=buttons.settings_markup(
@@ -72,6 +73,7 @@ async def settings(_, message: types.Message):
             thumbnail,
             _language,
             message.chat.id,
+            welcome,
         ),
         quote=True,
     )

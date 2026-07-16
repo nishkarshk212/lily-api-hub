@@ -327,6 +327,30 @@ class MongoDB:
             upsert=True,
         )
 
+    # WELCOME METHODS
+    async def get_welcome(self, chat_id: int) -> dict:
+        """Return the welcome config for a chat.
+
+        Shape: {enabled: bool, text: str|None, media: str|None,
+        buttons: str|None}. ``buttons`` is the raw button spec string
+        (``text - url | text - url`` rows separated by newlines).
+        """
+        doc = await self.chatsdb.find_one({"_id": chat_id}) or {}
+        w = doc.get("welcome") or {}
+        return {
+            "enabled": bool(w.get("enabled")),
+            "text": w.get("text"),
+            "media": w.get("media"),
+            "buttons": w.get("buttons"),
+        }
+
+    async def set_welcome(self, chat_id: int, **fields) -> None:
+        """Patch one or more welcome fields (enabled/text/media/buttons)."""
+        update = {f"welcome.{k}": v for k, v in fields.items()}
+        await self.chatsdb.update_one(
+            {"_id": chat_id}, {"$set": update}, upsert=True
+        )
+
     # PLAY MODE METHODS
     async def get_play_mode(self, chat_id: int) -> bool:
         if chat_id not in self.admin_play:

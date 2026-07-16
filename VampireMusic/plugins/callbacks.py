@@ -290,27 +290,38 @@ async def song_download_cb(_, query: types.CallbackQuery):
 @lang.language()
 @admin_check
 async def _settings_cb(_, query: types.CallbackQuery):
+    cmd = query.data.split()
+    chat_id = query.message.chat.id
+
+    # "welcome_info" just shows the placeholder/help instructions.
+    if len(cmd) > 1 and cmd[1] == "welcome_info":
+        return await query.answer(query.lang["welcome_instr"], show_alert=True)
+
     await query.answer(query.lang["processing"], show_alert=True)
 
-    chat_id = query.message.chat.id
     _admin = await db.get_play_mode(chat_id)
     _delete = await db.get_cmd_delete(chat_id)
     _vclog = await db.get_vclogger(chat_id)
     _thumbnail = await db.get_thumb_mode(chat_id)
     _language = await db.get_lang(chat_id)
+    _welcome = (await db.get_welcome(chat_id))["enabled"]
 
-    if cmd[1] == "delete":
-        _delete = not _delete
-        await db.set_cmd_delete(chat_id, _delete)
-    elif cmd[1] == "play":
-        await db.set_play_mode(chat_id, _admin)
-        _admin = not _admin
-    elif cmd[1] == "vclog":
-        _vclog = not _vclog
-        await db.set_vclogger(chat_id, _vclog)
-    elif cmd[1] == "thumb":
-        _thumbnail = not _thumbnail
-        await db.set_thumb_mode(chat_id, _thumbnail)
+    if len(cmd) > 1:
+        if cmd[1] == "delete":
+            _delete = not _delete
+            await db.set_cmd_delete(chat_id, _delete)
+        elif cmd[1] == "play":
+            await db.set_play_mode(chat_id, _admin)
+            _admin = not _admin
+        elif cmd[1] == "vclog":
+            _vclog = not _vclog
+            await db.set_vclogger(chat_id, _vclog)
+        elif cmd[1] == "thumb":
+            _thumbnail = not _thumbnail
+            await db.set_thumb_mode(chat_id, _thumbnail)
+        elif cmd[1] == "welcome":
+            _welcome = not _welcome
+            await db.set_welcome(chat_id, enabled=_welcome)
 
     await query.edit_message_reply_markup(
         reply_markup=buttons.settings_markup(
@@ -321,5 +332,6 @@ async def _settings_cb(_, query: types.CallbackQuery):
             _thumbnail,
             _language,
             chat_id,
+            _welcome,
         )
     )
