@@ -84,11 +84,20 @@ class YouTube:
             return not self.valid(url)
         return False
 
-    def _track_from_lily(self, item: dict, m_id: int) -> Track:
-        """Build a Track from a lily/JioSaavn result (stream URL preset)."""
+    async def _track_from_lily(self, item: dict, m_id: int) -> Track:
+        """Build a Track from a lily result.
+
+        JioSaavn results carry a ready ``stream_url``. YouTube-platform
+        results only carry a watch ``url``; resolve a direct stream URL via
+        lily ``/play`` so the track is playable.
+        """
         dur = int(float(item.get("duration") or 0))
+        video_id = item.get("id")
+        stream_url = item.get("stream_url")
+        if not stream_url and config.LILY_API_KEY and video_id:
+            stream_url = await self._lily_direct_url(video_id, "audio")
         return Track(
-            id=item.get("id"),
+            id=video_id,
             channel_name=item.get("artists"),
             duration=f"{dur // 60}:{dur % 60:02d}",
             duration_sec=dur,
@@ -96,7 +105,7 @@ class YouTube:
             title=(item.get("title") or "")[:25],
             thumbnail=item.get("thumbnail"),
             url=item.get("url"),
-            file_path=item.get("stream_url"),
+            file_path=stream_url,
             view_count=item.get("album") or "",
             video=False,
         )
@@ -118,8 +127,8 @@ class YouTube:
                 item = await self.lily_fallback.search(query)
                 if item:
                     source = "nexgen"
-            if item and item.get("stream_url"):
-                track = self._track_from_lily(item, m_id)
+            if item and (item.get("stream_url") or item.get("url")):
+                track = await self._track_from_lily(item, m_id)
                 track.source = source
                 return track
             # Both music sources returned nothing (dead key / empty / error).
@@ -137,7 +146,7 @@ class YouTube:
             return None
         if results and results["result"]:
             data = results["result"][0]
-            return Track(
+            track = Track(
                 id=data.get("id"),
                 channel_name=data.get("channel", {}).get("name"),
                 duration=data.get("duration"),
@@ -149,6 +158,15 @@ class YouTube:
                 view_count=data.get("viewCount", {}).get("short"),
                 video=video,
             )
+            # Resolve a real stream URL so PyTgCalls has an audio source to
+            # play (the raw YouTube search result only carries a watch URL,
+            # which is what triggered "no audio source found" before).
+            if config.LILY_API_KEY and not video:
+                direct = await self._lily_direct_url(data.get("id"), "audio")
+                if direct:
+                    track.file_path = direct
+                    track.source = "lily"
+            return track
         return None
 
     async def search_multi(self, query: str, m_id: int, video: bool = False, limit: int = 5) -> list[Track]:
@@ -174,6 +192,17 @@ class YouTube:
                         video=video,
                     )
                 )
+            # Resolve real stream URLs so each track has an audio source to
+            # play (raw YouTube results only carry watch URLs -> "no audio
+            # source found" before this fix).
+            if config.LILY_API_KEY and not video:
+                directs = await asyncio.gather(
+                    *(self._lily_direct_url(t.id, "audio") for t in tracks)
+                )
+                for t, d in zip(tracks, directs):
+                    if d:
+                        t.file_path = d
+                        t.source = "lily"
         return tracks
 
     # Canonical watch-page URL templates for the platforms /play accepts.
