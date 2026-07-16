@@ -84,20 +84,18 @@ class YouTube:
             return not self.valid(url)
         return False
 
-    async def _track_from_lily(self, item: dict, m_id: int) -> Track:
-        """Build a Track from a lily result.
+    def _track_from_lily(self, item: dict, m_id: int) -> Track:
+        """Build a Track from a lily/JioSaavn result (stream URL preset).
 
-        JioSaavn results carry a ready ``stream_url``. YouTube-platform
-        results only carry a watch ``url``; resolve a direct stream URL via
-        lily ``/play`` so the track is playable.
+        Note: only set ``file_path`` from ``stream_url`` when it is a real
+        direct media URL (JioSaavn). lily's YouTube ``direct_url`` is
+        IP-locked to the lily backend and 403s from this server, so it must
+        NOT be used as a stream source — the download path (yt-dlp) fetches a
+        fresh, IP-correct URL instead.
         """
         dur = int(float(item.get("duration") or 0))
-        video_id = item.get("id")
-        stream_url = item.get("stream_url")
-        if not stream_url and config.LILY_API_KEY and video_id:
-            stream_url = await self._lily_direct_url(video_id, "audio")
         return Track(
-            id=video_id,
+            id=item.get("id"),
             channel_name=item.get("artists"),
             duration=f"{dur // 60}:{dur % 60:02d}",
             duration_sec=dur,
@@ -105,7 +103,7 @@ class YouTube:
             title=(item.get("title") or "")[:25],
             thumbnail=item.get("thumbnail"),
             url=item.get("url"),
-            file_path=stream_url,
+            file_path=item.get("stream_url"),
             view_count=item.get("album") or "",
             video=False,
         )
@@ -127,8 +125,8 @@ class YouTube:
                 item = await self.lily_fallback.search(query)
                 if item:
                     source = "nexgen"
-            if item and (item.get("stream_url") or item.get("url")):
-                track = await self._track_from_lily(item, m_id)
+            if item and item.get("stream_url"):
+                track = self._track_from_lily(item, m_id)
                 track.source = source
                 return track
             # Both music sources returned nothing (dead key / empty / error).
@@ -146,7 +144,7 @@ class YouTube:
             return None
         if results and results["result"]:
             data = results["result"][0]
-            track = Track(
+            return Track(
                 id=data.get("id"),
                 channel_name=data.get("channel", {}).get("name"),
                 duration=data.get("duration"),
@@ -158,15 +156,6 @@ class YouTube:
                 view_count=data.get("viewCount", {}).get("short"),
                 video=video,
             )
-            # Resolve a real stream URL so PyTgCalls has an audio source to
-            # play (the raw YouTube search result only carries a watch URL,
-            # which is what triggered "no audio source found" before).
-            if config.LILY_API_KEY and not video:
-                direct = await self._lily_direct_url(data.get("id"), "audio")
-                if direct:
-                    track.file_path = direct
-                    track.source = "lily"
-            return track
         return None
 
     async def search_multi(self, query: str, m_id: int, video: bool = False, limit: int = 5) -> list[Track]:
@@ -192,17 +181,6 @@ class YouTube:
                         video=video,
                     )
                 )
-            # Resolve real stream URLs so each track has an audio source to
-            # play (raw YouTube results only carry watch URLs -> "no audio
-            # source found" before this fix).
-            if config.LILY_API_KEY and not video:
-                directs = await asyncio.gather(
-                    *(self._lily_direct_url(t.id, "audio") for t in tracks)
-                )
-                for t, d in zip(tracks, directs):
-                    if d:
-                        t.file_path = d
-                        t.source = "lily"
         return tracks
 
     # Canonical watch-page URL templates for the platforms /play accepts.
@@ -220,12 +198,15 @@ class YouTube:
     ) -> Track | None:
         """Resolve a video id to a direct, streamable URL via lily ``/play``.
 
-        Uses ``GET /play?type=video&platform=&id=`` which returns a
-        ``direct_url`` (e.g. a YouTube googlevideo mp4, or a resolved
-        Dailymotion/Vimeo/Facebook/Bilibili stream). Feeding that URL
-        straight to PyTgCalls avoids the slow local download. Returns
-        ``None`` on failure so the caller can fall back to downloading.
+        Used for alt-platform links (Dailymotion/Vimeo/Facebook/Bilibili).
+        NOTE: lily's ``direct_url`` is IP-locked to the lily backend and 403s
+        from this server, so for ``youtube`` we return ``None`` and let the
+        caller download locally via yt-dlp (which fetches an IP-correct URL).
+        Returns ``None`` on failure so the caller can fall back to downloading.
         """
+        if platform == "youtube":
+            # yt-dlp handles YouTube locally with a correct IP-bound URL.
+            return None
         if not config.LILY_API_KEY:
             return None
         base = config.LILY_API_URL.rstrip("/")
@@ -347,45 +328,126 @@ class YouTube:
             logger.warning(f"[LILY] direct_url({kind}:{video_id}) failed: {e}")
             return None
 
-    async def _download_audio(self, video_id: str):
-        # Primary path: lily direct audio URL (no local download needed).
-        if config.LILY_API_KEY:
-            url = await self._lily_direct_url(video_id, "audio")
-            if url:
-                logger.info(
-                    f"🎵 [AUDIO] Resolved ID {video_id} via lily direct_url"
-                )
-                return url
-            logger.warning(
-                f"🎵 [AUDIO] lily direct_url unavailable for {video_id}; "
-                f"falling back to {config.API_URL}"
-            )
+    async def _yt_dlp_download(
+        self, video_id: str, video: bool
+    ) -> str | None:
+        """Download a YouTube id to a local file via yt-dlp and return the path.
 
-        if not config.API_KEY:
+        yt-dlp fetches a fresh, IP-correct googlevideo URL from THIS server,
+        so the resulting local file is playable by PyTgCalls (unlike lily's
+        ``direct_url``, which is IP-locked to the lily backend and 403s here).
+        """
+        from yt_dlp import YoutubeDL
+
+        os.makedirs("downloads", exist_ok=True)
+        ext = "mkv" if video else "webm"
+        out_tmpl = f"downloads/{video_id}.%(ext)s"
+        ydl_opts = {
+            "outtmpl": out_tmpl,
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "format": (
+                "bestvideo+bestaudio/best"
+                if video
+                else "bestaudio/best"
+            ),
+            "postprocessors": (
+                []
+                if video
+                else [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "webm",
+                        "preferredquality": "192",
+                    }
+                ]
+            ),
+            "merge_output_format": "mkv" if video else None,
+            "ffmpeg_location": "/usr/bin",
+            "retries": 3,
+            "socket_timeout": 30,
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        }
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        try:
+            proc = await asyncio.to_thread(
+                self._run_yt_dlp, ydl_opts, url
+            )
+            if proc != 0:
+                logger.error(
+                    f"[{'VIDEO' if video else 'AUDIO'}] yt-dlp exited "
+                    f"{proc} for {video_id}"
+                )
+                return None
+            # yt-dlp picks the final extension; locate the produced file.
+            for candidate in Path("downloads").glob(f"{video_id}.*"):
+                if candidate.suffix.lstrip(".") in ("webm", "mkv", "mp4", "opus"):
+                    logger.info(
+                        f"🎵 [YTDLP] {'video' if video else 'audio'} "
+                        f"download completed for {video_id}"
+                    )
+                    return str(candidate)
             logger.error(
-                f"🎵 [AUDIO] Download FAILED for {video_id}: no API key set "
-                f"(set LILY_API_KEY or API_KEY in .env)."
+                f"[{'VIDEO' if video else 'AUDIO'}] yt-dlp produced no file "
+                f"for {video_id}"
             )
             return None
+        except Exception as e:
+            logger.error(f"[{'VIDEO' if video else 'AUDIO'}] yt-dlp error: {e}")
+            return None
 
-        logger.info(
-            f"🎵 [AUDIO] Starting download for ID {video_id} via "
-            f"{config.API_URL} key={mask_key(config.API_KEY)}"
-        )
+    @staticmethod
+    def _run_yt_dlp(ydl_opts: dict, url: str) -> int:
+        from yt_dlp import YoutubeDL
 
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        return 0
+
+    async def _download_audio(self, video_id: str):
+        # Primary path: download locally via yt-dlp (IP-correct URL from this
+        # server, so it plays). teaminflex is only a fallback when API_KEY is
+        # configured, since its direct_url is also IP-sensitive.
         path = Path(f"downloads/{video_id}.webm")
-        os.makedirs("downloads", exist_ok=True)
-
         if path.exists():
             logger.info(f"🎵 [LOCAL] Found existing audio for ID {video_id}")
             return str(path)
 
-        payload = {"url": video_id, "type": "audio"}
+        logger.info(f"🎵 [AUDIO] Downloading ID {video_id} via yt-dlp")
+        local = await self._yt_dlp_download(video_id, video=False)
+        if local:
+            return local
+
+        if not config.API_KEY:
+            logger.error(
+                f"🎵 [AUDIO] Download FAILED for {video_id}: yt-dlp failed "
+                f"and no API_KEY set for teaminflex fallback."
+            )
+            return None
+
+        logger.warning(
+            f"🎵 [AUDIO] yt-dlp failed; falling back to {config.API_URL}"
+        )
+        return await self._download_via_api(video_id, audio=True)
+
+    async def _download_via_api(self, video_id: str, audio: bool) -> str | None:
+        """Fallback download through the teaminflex API (requires API_KEY)."""
+        kind = "audio" if audio else "video"
+        path = Path(f"downloads/{video_id}.{'webm' if audio else 'mkv'}")
+        os.makedirs("downloads", exist_ok=True)
+        payload = {"url": video_id, "type": kind}
         headers = {
             "Content-Type": "application/json",
             "X-API-KEY": config.API_KEY,
         }
-
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.post(
@@ -394,176 +456,66 @@ class YouTube:
                     headers=headers,
                 ) as response:
                     data = await response.json(content_type=None)
-
                 if data and data.get("status") == "error":
-                    logger.error(f"[AUDIO] API ERROR → {data}")
+                    logger.error(f"[{kind.upper()}] API ERROR → {data}")
                     return None
-
-                retries = 10
-
+                retries = 10 if audio else 20
                 if not data or not data.get("download_url"):
-                    logger.warning(
-                        "[AUDIO] File not ready / JSON missing → retrying..."
-                    )
-
                     for i in range(retries):
-                        await asyncio.sleep(8)
-
+                        await asyncio.sleep(8 if audio else 20)
                         async with session.post(
                             f"{config.API_URL}/download",
                             json=payload,
                             headers=headers,
                         ) as response:
                             data = await response.json(content_type=None)
-
                         if data and data.get("status") == "error":
-                            logger.error(f"[AUDIO] API ERROR during retry → {data}")
+                            logger.error(f"[{kind.upper()}] API ERROR → {data}")
                             return None
-
-                        if (
-                            data
-                            and data.get("status") == "success"
-                            and data.get("download_url")
-                        ):
-                            logger.info(f"[AUDIO] Got URL after retry #{i + 1}")
+                        if data and data.get("download_url"):
                             break
-
-                        logger.warning(
-                            f"[AUDIO] Retry {i + 1}/{retries} → still not ready"
-                        )
-
                 if not data or not data.get("download_url"):
-                    logger.error(f"[AUDIO] FAILED after all retries → {data}")
+                    logger.error(f"[{kind.upper()}] FAILED → {data}")
                     return None
-
                 download_link = config.API_URL + data["download_url"]
-
-                async with session.get(download_link) as file_response:
-                    if file_response.status != 200:
-                        logger.error(
-                            f"[AUDIO] Download failed → {file_response.status}"
-                        )
+                async with session.get(download_link) as fr:
+                    if fr.status != 200:
+                        logger.error(f"[{kind.upper()}] download → {fr.status}")
                         return None
-
                     with open(path, "wb") as f:
-                        async for chunk in file_response.content.iter_chunked(8192):
+                        async for chunk in fr.content.iter_chunked(8192):
                             f.write(chunk)
-
-                logger.info(f"🎵 [API] Audio download completed for {video_id}")
+                logger.info(f"🎵 [API] {kind} download completed for {video_id}")
                 return str(path)
-
             except Exception as e:
-                logger.error(f"[AUDIO] Exception: {e}")
+                logger.error(f"[{kind.upper()}] Exception: {e}")
                 return None
 
     async def _download_video(self, video_id: str):
-        # Primary path: lily direct video URL (no local download needed).
-        if config.LILY_API_KEY:
-            url = await self._lily_direct_url(video_id, "video")
-            if url:
-                logger.info(
-                    f"🎥 [VIDEO] Resolved ID {video_id} via lily direct_url"
-                )
-                return url
-            logger.warning(
-                f"🎥 [VIDEO] lily direct_url unavailable for {video_id}; "
-                f"falling back to {config.API_URL}"
-            )
-
-        if not config.API_KEY:
-            logger.error(
-                f"🎥 [VIDEO] Download FAILED for {video_id}: no API key set "
-                f"(set LILY_API_KEY or API_KEY in .env)."
-            )
-            return None
-
-        logger.info(
-            f"🎥 [VIDEO] Starting download for ID {video_id} via "
-            f"{config.API_URL} key={mask_key(config.API_KEY)}"
-        )
-
+        # Primary path: download locally via yt-dlp (IP-correct URL from
+        # this server, so it plays). teaminflex is only a fallback when
+        # API_KEY is configured.
         path = Path(f"downloads/{video_id}.mkv")
-        os.makedirs("downloads", exist_ok=True)
-
         if path.exists():
             logger.info(f"🎥 [LOCAL] Found existing video for ID {video_id}")
             return str(path)
 
-        payload = {"url": video_id, "type": "video"}
-        headers = {
-            "Content-Type": "application/json",
-            "X-API-KEY": config.API_KEY,
-        }
+        logger.info(f"🎥 [VIDEO] Downloading ID {video_id} via yt-dlp")
+        local = await self._yt_dlp_download(video_id, video=True)
+        if local:
+            return local
 
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.post(
-                    f"{config.API_URL}/download",
-                    json=payload,
-                    headers=headers,
-                ) as response:
-                    data = await response.json(content_type=None)
+        if not config.API_KEY:
+            logger.error(
+                f"🎥 [VIDEO] Download FAILED for {video_id}: yt-dlp failed "
+                f"and no API_KEY set for teaminflex fallback."
+            )
+            return None
 
-                if data and data.get("status") == "error":
-                    logger.error(f"[VIDEO] API ERROR → {data}")
-                    return None
-
-                retries = 20
-
-                if not data or not data.get("download_url"):
-                    logger.warning(
-                        "[VIDEO] File not ready / JSON missing → retrying..."
-                    )
-
-                    for i in range(retries):
-                        await asyncio.sleep(20)
-
-                        async with session.post(
-                            f"{config.API_URL}/download",
-                            json=payload,
-                            headers=headers,
-                        ) as response:
-                            data = await response.json(content_type=None)
-
-                        if data and data.get("status") == "error":
-                            logger.error(f"[VIDEO] API ERROR during retry → {data}")
-                            return None
-
-                        if (
-                            data
-                            and data.get("status") == "success"
-                            and data.get("download_url")
-                        ):
-                            logger.info(f"[VIDEO] Got URL after retry #{i + 1}")
-                            break
-
-                        logger.warning(
-                            f"[VIDEO] Retry {i + 1}/{retries} → still not ready"
-                        )
-
-                if not data or not data.get("download_url"):
-                    logger.error(f"[VIDEO] FAILED after all retries → {data}")
-                    return None
-
-                download_link = config.API_URL + data["download_url"]
-
-                async with session.get(download_link) as file_response:
-                    if file_response.status != 200:
-                        logger.error(
-                            f"[VIDEO] Download failed → {file_response.status}"
-                        )
-                        return None
-
-                    with open(path, "wb") as f:
-                        async for chunk in file_response.content.iter_chunked(8192):
-                            f.write(chunk)
-
-                logger.info(f"🎥 [API] Video download completed for {video_id}")
-                return str(path)
-
-            except Exception as e:
-                logger.error(f"[VIDEO] Exception: {e}")
-                return None
+        logger.warning(
+            f"🎥 [VIDEO] yt-dlp failed; falling back to {config.API_URL}"
+        )
+        return await self._download_via_api(video_id, audio=False)
 
     async def download(self, video_id: str, video: bool = False):
         # Reached only for YouTube ids (URL plays, playlists, autoplay,
