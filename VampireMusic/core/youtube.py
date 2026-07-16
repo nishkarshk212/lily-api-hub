@@ -274,7 +274,64 @@ class YouTube:
             pass
         return tracks
 
+    async def _lily_direct_url(
+        self, video_id: str, kind: str = "audio", platform: str = "youtube"
+    ) -> str | None:
+        """Get a direct stream URL for ``video_id`` from the lily API.
+
+        Used as the primary download path so YouTube audio/video plays
+        without depending on the (frequently key-less) teaminflex endpoint.
+        Returns the ``direct_url`` or ``None`` on failure.
+        """
+        if not config.LILY_API_KEY:
+            return None
+        base = config.LILY_API_URL.rstrip("/")
+        params = {
+            "type": kind,
+            "platform": platform,
+            "id": video_id,
+            "api_key": config.LILY_API_KEY,
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{base}/play",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    data = await resp.json(content_type=None)
+            if data.get("success") and data.get("direct_url"):
+                return data["direct_url"]
+            logger.warning(
+                f"[LILY] /play {kind} returned no direct_url for "
+                f"{platform}:{video_id} -> {data}"
+            )
+            return None
+        except Exception as e:
+            logger.warning(f"[LILY] direct_url({kind}:{video_id}) failed: {e}")
+            return None
+
     async def _download_audio(self, video_id: str):
+        # Primary path: lily direct audio URL (no local download needed).
+        if config.LILY_API_KEY:
+            url = await self._lily_direct_url(video_id, "audio")
+            if url:
+                logger.info(
+                    f"🎵 [AUDIO] Resolved ID {video_id} via lily direct_url"
+                )
+                return url
+            logger.warning(
+                f"🎵 [AUDIO] lily direct_url unavailable for {video_id}; "
+                f"falling back to {config.API_URL}"
+            )
+
+        if not config.API_KEY:
+            logger.error(
+                f"🎵 [AUDIO] Download FAILED for {video_id}: no API key set "
+                f"(set LILY_API_KEY or API_KEY in .env)."
+            )
+            return None
+
         logger.info(
             f"🎵 [AUDIO] Starting download for ID {video_id} via "
             f"{config.API_URL} key={mask_key(config.API_KEY)}"
@@ -364,6 +421,26 @@ class YouTube:
                 return None
 
     async def _download_video(self, video_id: str):
+        # Primary path: lily direct video URL (no local download needed).
+        if config.LILY_API_KEY:
+            url = await self._lily_direct_url(video_id, "video")
+            if url:
+                logger.info(
+                    f"🎥 [VIDEO] Resolved ID {video_id} via lily direct_url"
+                )
+                return url
+            logger.warning(
+                f"🎥 [VIDEO] lily direct_url unavailable for {video_id}; "
+                f"falling back to {config.API_URL}"
+            )
+
+        if not config.API_KEY:
+            logger.error(
+                f"🎥 [VIDEO] Download FAILED for {video_id}: no API key set "
+                f"(set LILY_API_KEY or API_KEY in .env)."
+            )
+            return None
+
         logger.info(
             f"🎥 [VIDEO] Starting download for ID {video_id} via "
             f"{config.API_URL} key={mask_key(config.API_KEY)}"
