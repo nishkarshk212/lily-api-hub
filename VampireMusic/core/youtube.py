@@ -333,16 +333,19 @@ class YouTube:
     ) -> str | None:
         """Download a YouTube id to a local file via yt-dlp and return the path.
 
-        yt-dlp fetches a fresh, IP-correct googlevideo URL from THIS server,
-        so the resulting local file is playable by PyTgCalls (unlike lily's
-        ``direct_url``, which is IP-locked to the lily backend and 403s here).
+        The bot server's egress IP is bot-flagged by YouTube, so a plain
+        download hits "Sign in to confirm you're not a bot". A cookies.txt
+        exported from a real YouTube account (dropped into
+        ``VampireMusic/cookies/``) bypasses that — we try with cookies first,
+        then without. The resulting local file is IP-correct and playable by
+        PyTgCalls (unlike lily's ``direct_url``, which is IP-locked to the
+        lily backend and 403s here).
         """
         from yt_dlp import YoutubeDL
 
         os.makedirs("downloads", exist_ok=True)
-        ext = "mkv" if video else "webm"
         out_tmpl = f"downloads/{video_id}.%(ext)s"
-        ydl_opts = {
+        base_opts = {
             "outtmpl": out_tmpl,
             "quiet": True,
             "no_warnings": True,
@@ -377,40 +380,43 @@ class YouTube:
             },
         }
         url = f"https://www.youtube.com/watch?v={video_id}"
-        try:
-            proc = await asyncio.to_thread(
-                self._run_yt_dlp, ydl_opts, url
-            )
-            if proc != 0:
-                logger.error(
-                    f"[{'VIDEO' if video else 'AUDIO'}] yt-dlp exited "
-                    f"{proc} for {video_id}"
-                )
-                return None
-            # yt-dlp picks the final extension; locate the produced file.
+
+        # Try with cookies first (only thing that beats the bot-check here).
+        cookie = self.get_cookies()
+        attempts = []
+        if cookie:
+            attempts.append((f"{'VIDEO' if video else 'AUDIO'}", {**base_opts, "cookiefile": cookie}))
+        attempts.append((f"{'VIDEO' if video else 'AUDIO'} (no cookies)", base_opts))
+
+        last_err = None
+        for label, opts in attempts:
+            try:
+                await asyncio.to_thread(self._run_yt_dlp, opts, url)
+            except Exception as e:  # yt-dlp raises on failure
+                last_err = e
+                logger.warning(f"[{label}] yt-dlp failed for {video_id}: {e}")
+                continue
+            # Locate the produced file.
             for candidate in Path("downloads").glob(f"{video_id}.*"):
                 if candidate.suffix.lstrip(".") in ("webm", "mkv", "mp4", "opus"):
                     logger.info(
                         f"🎵 [YTDLP] {'video' if video else 'audio'} "
-                        f"download completed for {video_id}"
+                        f"download completed for {video_id} ({label})"
                     )
                     return str(candidate)
+            logger.warning(f"[{label}] yt-dlp produced no file for {video_id}")
+        if last_err:
             logger.error(
-                f"[{'VIDEO' if video else 'AUDIO'}] yt-dlp produced no file "
-                f"for {video_id}"
+                f"[{'VIDEO' if video else 'AUDIO'}] yt-dlp error: {last_err}"
             )
-            return None
-        except Exception as e:
-            logger.error(f"[{'VIDEO' if video else 'AUDIO'}] yt-dlp error: {e}")
-            return None
+        return None
 
     @staticmethod
-    def _run_yt_dlp(ydl_opts: dict, url: str) -> int:
+    def _run_yt_dlp(ydl_opts: dict, url: str) -> None:
         from yt_dlp import YoutubeDL
 
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-        return 0
 
     async def _download_audio(self, video_id: str):
         # Primary path: download locally via yt-dlp (IP-correct URL from this
