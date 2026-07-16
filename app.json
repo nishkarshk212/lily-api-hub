@@ -1,0 +1,51 @@
+{
+    "name": "VampireMusic",
+    "description": "A powerful Telegram Music Bot for Group Voice Chats, supporting high-quality audio and video streaming.",
+    "logo": "https://graph.org/file/6c510fa85198a9c57bbfc-67f67482edae0a38bd.jpg",
+    "keywords": [
+        "telegram",
+        "music-bot",
+        "voice-chat",
+        "python",
+        "pyrogram",
+        "VampireMusic"
+    ],
+    "stack": "container",
+    "env": {
+        "API_ID": {
+            "description": "Get this value from https://my.telegram.org",
+            "value": "",
+            "required": true
+        },
+        "API_HASH": {
+            "description": "Get this value from https://my.telegram.org",
+            "value": "",
+            "required": true
+        },
+        "BOT_TOKEN": {
+            "description": "A Bot's token from Botfather",
+            "value": "",
+            "required": true
+        },
+        "MONGO_URL": {
+            "description": "Get a mongodb url from https://cloud.mongodb.com.",
+            "value": "",
+            "required": true
+        },
+        "LOGGER_ID": {
+            "description": "Your log group ID, add your bot there and promote as an admin.",
+            "value": "",
+            "required": true
+        },
+        "OWNER_ID": {
+            "description": "The user id of user whom you would like to add as OWNER.",
+            "value": "",
+            "required": true
+        },
+        "SESSION": {
+            "description": "A Pyrogram v2 String Session from @StringFatherBot on Telegram.",
+            "value": "",
+            "required": true
+        }
+    }
+}

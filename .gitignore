@@ -1,0 +1,53 @@
+# Environment & secrets
+.env
+*.env.local
+*.env.dev
+.env.*
+
+# Pyrogram sessions (contains live auth — NEVER commit)
+*.session
+*.session-journal
+my_account.session
+
+# Cookies
+cookies/
+**/cookies/
+
+# Session-string generator (hardcoded creds helper)
+generate_session.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+bdist.*/
+dist/
+*.so
+
+# Caches / downloads
+cache/
+downloads/
+
+# Logs
+log.txt
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large binary assets (fonts, images, video) — keep repo lean
+*.ttf
+*.otf
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.webm
+*.mp4
+*.gif
