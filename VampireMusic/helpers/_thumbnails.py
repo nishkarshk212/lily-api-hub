@@ -79,7 +79,7 @@ class Thumbnail:
 
     def create_image(self, thumb_path, output, song):
         # Dynamic font loading for proper sizes
-        font_title = safe_font(FONT_TITLE_PATH, 46)
+        font_title = safe_font(FONT_TITLE_PATH, 135)
         font_info = safe_font(FONT_INFO_PATH, 24)
         font_time = safe_font(FONT_INFO_PATH, 20)
         font_brand = safe_font(FONT_TITLE_PATH, 26)
@@ -143,7 +143,7 @@ class Thumbnail:
         card_draw = ImageDraw.Draw(card_img)
 
         # --- 3. INNER COVER IMAGE ---
-        cover_w, cover_h = 820, 320
+        cover_w, cover_h = 820, 230
         cover_x, cover_y = 40, 40
         cover_radius = 20
 
@@ -178,9 +178,9 @@ class Thumbnail:
             return best
 
         title_str = ellipsize(title_text, font_title, 820)
-        title_y = 378
+        title_y = 295
         # subtle shadow for a bolder, more prominent title
-        card_draw.text((42, title_y + 2), title_str, fill=(0, 0, 0, 40), font=font_title)
+        card_draw.text((42, title_y + 3), title_str, fill=(0, 0, 0, 40), font=font_title)
         card_draw.text((40, title_y), title_str, fill=(20, 20, 20, 255), font=font_title)
 
         # Subtitle (Channel name & views)
@@ -188,7 +188,7 @@ class Thumbnail:
         if getattr(song, "view_count", None):
             sub_text += f"   ·   {song.view_count}"
         subtitle_str = ellipsize(sub_text, font_info, 820)
-        subtitle_y = 435
+        subtitle_y = 430
         card_draw.text((40, subtitle_y), subtitle_str, fill=(100, 100, 100, 255), font=font_info)
 
         # --- 5. PROGRESS BAR ---
