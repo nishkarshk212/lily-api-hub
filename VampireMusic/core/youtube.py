@@ -158,6 +158,52 @@ class YouTube:
                 )
         return tracks
 
+    async def resolve_video(self, video_id: str, m_id: int = 0) -> Track | None:
+        """Resolve a YouTube video id to a direct, streamable mp4 URL via lily.
+
+        Uses the new GET ``/play?type=video&id=`` route which returns a
+        ``direct_url`` (a YouTube googlevideo mp4 stream). Feeding that URL
+        straight to PyTgCalls avoids the slow local mkv download. Falls back
+        to ``None`` so the caller can keep using the download path.
+        """
+        if not config.LILY_API_KEY:
+            return None
+        base = config.LILY_API_URL.rstrip("/")
+        params = {
+            "type": "video",
+            "id": video_id,
+            "api_key": config.LILY_API_KEY,
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{base}/play",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    data = await resp.json(content_type=None)
+            if not (data.get("success") and data.get("direct_url")):
+                logger.warning(f"[VIDEO] /play returned no direct_url for {video_id}")
+                return None
+            dur = int(float(data.get("duration") or 0))
+            track = Track(
+                id=video_id,
+                channel_name=data.get("channel") or "",
+                duration=f"{dur // 60}:{dur % 60:02d}",
+                duration_sec=dur,
+                message_id=m_id,
+                title=(data.get("title") or "Unknown")[:25],
+                thumbnail=data.get("thumbnail") or config.DEFAULT_THUMB,
+                url=f"https://youtu.be/{video_id}",
+                file_path=data["direct_url"],
+                video=True,
+            )
+            track.source = "lily"
+            return track
+        except Exception as e:
+            logger.warning(f"[VIDEO] resolve_video({video_id}) failed: {e}")
+            return None
+
     async def playlist(
         self, limit: int, user: str, url: str, video: bool
     ) -> list[Track | None]:

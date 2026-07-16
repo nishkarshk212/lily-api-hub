@@ -74,6 +74,14 @@ async def play_hndlr(
     if not file:
         return await sent.edit_text(m.lang["play_usage"])
 
+    # Fast path for video: resolve a direct mp4 stream URL via the lily
+    # /play endpoint so we stream straight to PyTgCalls (no local mkv
+    # download). Falls back to the download path below if it fails.
+    if video and file.id:
+        resolved = await yt.resolve_video(file.id, file.message_id)
+        if resolved:
+            file = resolved
+
     if file.duration_sec > config.DURATION_LIMIT:
         return await sent.edit_text(
             m.lang["play_duration_limit"].format(config.DURATION_LIMIT // 60)
