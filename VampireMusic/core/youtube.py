@@ -536,6 +536,12 @@ class YouTube:
 
                 du = data.get("proxy_url")
                 if du:
+                    # Normalize host to match the requested base URL (ensures API Key matches)
+                    from urllib.parse import urlparse, urlunparse
+                    parsed_du = urlparse(du)
+                    parsed_base = urlparse(base)
+                    du = urlunparse((parsed_base.scheme, parsed_base.netloc, parsed_du.path, parsed_du.params, parsed_du.query, parsed_du.fragment))
+
                     # Append API key since the server-generated proxy_url lacks it
                     if "?" in du:
                         du += f"&api_key={key}"
@@ -727,6 +733,12 @@ class YouTube:
                             # For audio: prefer proxy_url (with raw format to bypass transcoding latency)
                             du = data.get("proxy_url")
                             if du:
+                                # Normalize host to match the requested base URL (ensures API Key matches)
+                                from urllib.parse import urlparse, urlunparse
+                                parsed_du = urlparse(du)
+                                parsed_base = urlparse(base)
+                                du = urlunparse((parsed_base.scheme, parsed_base.netloc, parsed_du.path, parsed_du.params, parsed_du.query, parsed_du.fragment))
+
                                 if "?" in du:
                                     du += f"&api_key={key}"
                                 else:
