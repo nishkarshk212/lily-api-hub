@@ -353,7 +353,7 @@ class YouTube:
             "no_warnings": True,
             "noplaylist": True,
             "format": (
-                "bestvideo+bestaudio/best"
+                "best[height<=360]/best"
                 if video
                 else "bestaudio/best"
             ),
