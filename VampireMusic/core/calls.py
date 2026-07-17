@@ -44,6 +44,16 @@ class TgCall(PyTgCalls):
 
     async def stop(self, chat_id: int) -> None:
         client = await db.get_assistant(chat_id)
+        # Clean up all downloaded local files in the queue
+        import os
+        for item in queue.get_queue(chat_id):
+            if item.file_path and not item.file_path.startswith(("http://", "https://")):
+                try:
+                    if os.path.exists(item.file_path):
+                        os.remove(item.file_path)
+                        logger.info(f"🗑️ [CLEANUP] Deleted queue local file: {item.file_path}")
+                except Exception:
+                    pass
         media = queue.get_current(chat_id)
         if media and media.message_id:
             try:
@@ -58,6 +68,19 @@ class TgCall(PyTgCalls):
             await client.leave_call(chat_id, close=False)
         except Exception:
             pass
+
+    async def pre_download_next(self, chat_id: int) -> None:
+        """Download the next track in the queue locally in the background."""
+        next_media = queue.get_next(chat_id, check=True)
+        if next_media and not next_media.file_path:
+            logger.info(f"📥 [PRE-DOWNLOAD] Starting background download for next track: {next_media.title}")
+            try:
+                path = await yt.download(next_media.id, video=next_media.video, force_download=True)
+                if path:
+                    next_media.file_path = path
+                    logger.info(f"📥 [PRE-DOWNLOAD] Finished background download for {next_media.title} -> {path}")
+            except Exception as e:
+                logger.error(f"[PRE-DOWNLOAD] Background download failed for {next_media.title}: {e}")
 
     async def play_media(
         self,
@@ -112,6 +135,9 @@ class TgCall(PyTgCalls):
                 await client.play(chat_id, stream)
             else:
                 await client.play(chat_id, stream)
+
+            # Schedule background pre-download of the next track in the queue
+            asyncio.create_task(self.pre_download_next(chat_id))
 
             media.played_at = time.time()
             if seek_time:
@@ -200,6 +226,17 @@ class TgCall(PyTgCalls):
 
         _lang = await lang.get_lang(chat_id)
         current = queue.get_current(chat_id)
+        # Clean up local file for finished track
+        if current and current.file_path:
+            if not current.file_path.startswith(("http://", "https://")):
+                import os
+                try:
+                    if os.path.exists(current.file_path):
+                        os.remove(current.file_path)
+                        logger.info(f"🗑️ [CLEANUP] Deleted played local file: {current.file_path}")
+                except Exception as e:
+                    logger.error(f"[CLEANUP] Failed to delete local file {current.file_path}: {e}")
+
         if current and current.message_id:
             try:
                 await app.delete_messages(chat_id, current.message_id)

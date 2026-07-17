@@ -699,11 +699,11 @@ class YouTube:
         )
         return await self._download_via_api(video_id, audio=False)
 
-    async def download(self, video_id: str, video: bool = False):
+    async def download(self, video_id: str, video: bool = False, force_download: bool = False):
         # Reached only for YouTube ids (URL plays, playlists, autoplay,
         # /song). JioSaavn tracks already carry their stream URL in
         # file_path, so they never hit this download path.
-        if config.DIRECT_STREAM and (config.LILY_API_KEY or config.LILY_FALLBACK_KEY):
+        if not force_download and config.DIRECT_STREAM and (config.LILY_API_KEY or config.LILY_FALLBACK_KEY):
             backends = [
                 (config.LILY_API_URL, config.LILY_API_KEY, "lily"),
                 (config.LILY_FALLBACK_URL, config.LILY_FALLBACK_KEY, "nexgen"),

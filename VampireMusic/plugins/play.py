@@ -9,8 +9,11 @@ from VampireMusic.helpers._play import checkUB
 
 def playlist_to_queue(chat_id: int, tracks: list) -> str:
     text = "<blockquote expandable>"
+    import asyncio
     for track in tracks:
         pos = queue.add(chat_id, track)
+        if pos == 1:
+            asyncio.create_task(VampireMusic.pre_download_next(chat_id))
         text += f"<b>{pos}.</b> {track.title}\n"
     text = text[:1948] + "</blockquote>"
     return text
@@ -120,6 +123,9 @@ async def play_hndlr(
         queue.force_add(m.chat.id, file)
     else:
         position = queue.add(m.chat.id, file)
+        if position == 1:
+            import asyncio
+            asyncio.create_task(VampireMusic.pre_download_next(m.chat.id))
 
         if position != 0 or await db.get_call(m.chat.id):
             await sent.edit_text(
