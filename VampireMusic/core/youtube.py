@@ -452,13 +452,14 @@ class YouTube:
     async def _lily_download(self, video_id: str, video: bool) -> str | None:
         """Fetch a streamable URL from a lily backend and download it locally.
 
-        The lily /play endpoint returns a direct CDN URL. We pull the bytes to
-        this server so the resulting local file is IP-correct and playable by
-        PyTgCalls (unlike streaming the remote URL, which may be IP-sensitive).
+        The lily proxy streaming endpoints (/play/audio and /play/video/hq) are
+        used directly first as they bypass YouTube IP restrictions via the API's proxy.
+        If they fail or are not supported, it falls back to querying /play to get
+        the proxy_url or direct_url and downloads from there.
         Tries every configured lily backend in order; returns the local path or
         None if all fail.
         """
-        if not config.LILY_API_KEY:
+        if not config.LILY_API_KEY and not config.LILY_FALLBACK_KEY:
             return None
         kind = "video" if video else "audio"
         ext = "mkv" if video else "webm"
@@ -473,7 +474,46 @@ class YouTube:
         for base, key, name in backends:
             if not base or not key:
                 continue
+
+            # Strategy 1: Direct Proxy Stream Download (Most resilient)
+            proxy_endpoint = f"{base.rstrip('/')}/play/{'video/hq' if video else 'audio'}"
             params = {
+                "id": video_id,
+                "platform": "youtube",
+                "api_key": key,
+            }
+            if not video:
+                params["format"] = "mp3"
+
+            logger.info(f"💾 [{name}] Attempting direct proxy stream download for {kind} ID {video_id}...")
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        proxy_endpoint,
+                        params=params,
+                        timeout=aiohttp.ClientTimeout(total=600),
+                    ) as resp:
+                        if resp.status == 200:
+                            os.makedirs("downloads", exist_ok=True)
+                            with open(path, "wb") as f:
+                                async for chunk in resp.content.iter_chunked(1024 * 1024):
+                                    f.write(chunk)
+                            if path.exists() and path.stat().st_size > 0:
+                                logger.info(
+                                    f"💾 [{name.upper()}] {kind} download completed via proxy endpoint for {video_id}"
+                                )
+                                return str(path)
+                        else:
+                            logger.warning(
+                                f"[{name}] Proxy endpoint returned HTTP {resp.status} for {video_id}"
+                            )
+            except Exception as e:
+                logger.warning(
+                    f"[{name}] Proxy endpoint download failed for {video_id}: {e}"
+                )
+
+            # Strategy 2: Fallback to /play resolved URLs
+            params_play = {
                 "type": kind,
                 "platform": "youtube",
                 "id": video_id,
@@ -483,18 +523,35 @@ class YouTube:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(
                         f"{base.rstrip('/')}/play",
-                        params=params,
+                        params=params_play,
                         timeout=aiohttp.ClientTimeout(total=25),
                     ) as resp:
                         data = await resp.json(content_type=None)
-                if not (data.get("success") and data.get("direct_url")):
+
+                if not data.get("success"):
                     logger.warning(
-                        f"[{name}] /play {kind} returned no direct_url for {video_id}"
+                        f"[{name}] /play {kind} returned success=False for {video_id}"
                     )
                     continue
-                du = data["direct_url"]
+
+                du = data.get("proxy_url")
+                if du:
+                    # Append API key since the server-generated proxy_url lacks it
+                    if "?" in du:
+                        du += f"&api_key={key}"
+                    else:
+                        du += f"?api_key={key}"
+                else:
+                    du = data.get("direct_url")
+
+                if not du:
+                    logger.warning(
+                        f"[{name}] /play {kind} returned no playable URL for {video_id}"
+                    )
+                    continue
+
                 logger.info(
-                    f"💾 [{name}] Downloading {kind} for {video_id} via direct_url"
+                    f"💾 [{name}] Downloading {kind} for {video_id} via resolved URL"
                 )
                 async with aiohttp.ClientSession() as session:
                     async with session.get(
@@ -504,7 +561,7 @@ class YouTube:
                     ) as fr:
                         if fr.status != 200:
                             logger.warning(
-                                f"[{name}] {kind} stream failed: HTTP {fr.status}"
+                                f"[{name}] Stream download failed: HTTP {fr.status}"
                             )
                             continue
                         os.makedirs("downloads", exist_ok=True)
@@ -518,7 +575,7 @@ class YouTube:
                     return str(path)
             except Exception as e:
                 logger.warning(
-                    f"[{name}] {kind} download failed for {video_id}: {e}"
+                    f"[{name}] Fallback /play download failed for {video_id}: {e}"
                 )
                 continue
         return None
