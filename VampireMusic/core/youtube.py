@@ -483,7 +483,7 @@ class YouTube:
                 "api_key": key,
             }
             if not video:
-                params["format"] = "mp3"
+                params["format"] = "raw"
 
             logger.info(f"💾 [{name}] Attempting direct proxy stream download for {kind} ID {video_id}...")
             try:
