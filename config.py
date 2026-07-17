@@ -49,6 +49,9 @@ class Config:
         # Comma-separated platforms to search, in order of preference.
         self.LILY_PLATFORM = getenv("LILY_PLATFORM", "youtube")
 
+        # Direct stream live links instead of downloading locally first
+        self.DIRECT_STREAM = getenv("DIRECT_STREAM", "True").lower() == "true"
+
         self.AUTO_LEAVE: bool = getenv("AUTO_LEAVE", "False").lower() == "true"
         self.AUTO_END: bool = getenv("AUTO_END", "False").lower() == "true"
 

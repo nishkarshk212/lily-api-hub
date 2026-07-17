@@ -697,6 +697,54 @@ class YouTube:
         # Reached only for YouTube ids (URL plays, playlists, autoplay,
         # /song). JioSaavn tracks already carry their stream URL in
         # file_path, so they never hit this download path.
+        if config.DIRECT_STREAM and (config.LILY_API_KEY or config.LILY_FALLBACK_KEY):
+            backends = [
+                (config.LILY_API_URL, config.LILY_API_KEY, "lily"),
+                (config.LILY_FALLBACK_URL, config.LILY_FALLBACK_KEY, "nexgen"),
+            ]
+            kind = "video" if video else "audio"
+            for base, key, name in backends:
+                if not base or not key:
+                    continue
+                params = {
+                    "type": kind,
+                    "platform": "youtube",
+                    "id": video_id,
+                    "api_key": key,
+                }
+                logger.info(f"💾 [DIRECT STREAM] [{name}] Resolving live play link for {kind} ID {video_id}...")
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(
+                            f"{base.rstrip('/')}/play",
+                            params=params,
+                            timeout=aiohttp.ClientTimeout(total=20),
+                        ) as resp:
+                            data = await resp.json(content_type=None)
+                    if data.get("success"):
+                        du = None
+                        if not video:
+                            # For audio: prefer proxy_url (with raw format to bypass transcoding latency)
+                            du = data.get("proxy_url")
+                            if du:
+                                if "?" in du:
+                                    du += f"&api_key={key}"
+                                else:
+                                    du += f"?api_key={key}"
+                                du += "&format=raw"
+                        
+                        if not du:
+                            # Fallback for audio or default for video (direct resolved YouTube CDN link)
+                            du = data.get("direct_url")
+                            
+                        if du:
+                            logger.info(f"💾 [DIRECT STREAM] [{name}] Successfully resolved: {du[:60]}...")
+                            return du
+                    else:
+                        logger.warning(f"[DIRECT STREAM] [{name}] returned success=False: {data}")
+                except Exception as e:
+                    logger.warning(f"[DIRECT STREAM] [{name}] Failed to resolve play stream: {e}")
+
         if video:
             return await self._download_video(video_id)
         return await self._download_audio(video_id)
