@@ -1,4 +1,5 @@
 import asyncio
+import colorsys
 import os
 from pathlib import Path
 
@@ -86,6 +87,29 @@ def create_horizontal_gradient(size, color1, color2, color3):
     tiny.putpixel((1, 0), color2)
     tiny.putpixel((2, 0), color3)
     return tiny.resize((w, h), Image.Resampling.BILINEAR).convert("RGBA")
+
+
+def get_vibrant_colors(image, num_colors=3):
+    # Resize heavily to speed up quantization and average out noise
+    small_image = image.resize((50, 50)).convert("RGB")
+    q = small_image.quantize(colors=num_colors, method=Image.Quantize.MAXCOVERAGE)
+    palette = q.getpalette()
+    
+    vibrant_colors = []
+    for i in range(num_colors):
+        r, g, b = palette[i*3 : i*3+3]
+        h, s, v = colorsys.rgb_to_hsv(r/255.0, g/255.0, b/255.0)
+        # Boost saturation and brightness for a glowing neon effect
+        s = min(1.0, s * 1.5 + 0.3)
+        v = min(1.0, v * 1.5 + 0.3)
+        r_n, g_n, b_n = colorsys.hsv_to_rgb(h, s, v)
+        vibrant_colors.append((int(r_n * 255), int(g_n * 255), int(b_n * 255)))
+    
+    # If it extracted less colors than we wanted, duplicate the last one
+    while len(vibrant_colors) < num_colors:
+        vibrant_colors.append(vibrant_colors[-1] if vibrant_colors else (0, 255, 255))
+        
+    return vibrant_colors
 
 
 def draw_gradient_border(canvas, box, radius, width, color1, color2, color3, blur=0):
@@ -277,9 +301,11 @@ class Thumbnail:
         card_h = card_y2 - card_y1
         radius = 42
 
-        color_left = (80, 180, 255)
-        color_mid = (160, 255, 90)
-        color_right = (255, 90, 150)
+        # Extract vibrant neon colors dynamically from the album cover
+        extracted_colors = get_vibrant_colors(src, 3)
+        color_left = extracted_colors[0]
+        color_mid = extracted_colors[1]
+        color_right = extracted_colors[2]
 
         # Translucent glass panel background
         panel = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
@@ -351,8 +377,8 @@ class Thumbnail:
 
         # Progress background and fill
         d.rounded_rectangle((bar_x1, bar_y, bar_x2, bar_y + 8), radius=4, fill=(185, 185, 185, 120))
-        d.rounded_rectangle((bar_x1, bar_y, played_x, bar_y + 8), radius=4, fill=(140, 255, 70, 255))
-        d.ellipse((played_x - 10, bar_y - 6, played_x + 10, bar_y + 14), fill=(255, 255, 255))
+        d.rounded_rectangle((bar_x1, bar_y, played_x, bar_y + 8), radius=4, fill=color_mid)
+        d.ellipse((played_x - 10, bar_y - 6, played_x + 14, bar_y + 14), fill=(255, 255, 255))
 
         # Playback time labels
         time_played = _fmt(cur) if cur else "00:00"
@@ -367,12 +393,12 @@ class Thumbnail:
 
         # Vector Icon Row
         icons_y = 515
-        draw_shuffle_icon(d, (625, icons_y))
-        draw_repeat_icon(d, (705, icons_y))
+        draw_shuffle_icon(d, (625, icons_y), color=color_mid)
+        draw_repeat_icon(d, (705, icons_y), color=color_left)
         draw_prev_icon(d, (785, icons_y))
         draw_pause_icon(d, (865, icons_y))
         draw_next_icon(d, (945, icons_y))
-        draw_heart_icon(d, (1025, icons_y))
+        draw_heart_icon(d, (1025, icons_y), color=color_right)
         draw_headphones_icon(d, (1105, icons_y))
 
         # Save and compress under 200KB limit
